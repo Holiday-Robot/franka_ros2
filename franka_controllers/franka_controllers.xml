@@ -1,0 +1,11 @@
+<library path="franka_controllers">
+    <class name="franka_controllers/JointTorqueController"
+           type="franka_controllers::JointTorqueController" base_class_type="controller_interface::ControllerInterface">
+    </class>
+    <class name="franka_controllers/JointVelocityController"
+           type="franka_controllers::JointVelocityController" base_class_type="controller_interface::ControllerInterface">
+    </class>
+    <class name="franka_controllers/JointPositionController"
+           type="franka_controllers::JointPositionController" base_class_type="controller_interface::ControllerInterface">
+    </class>
+</library>

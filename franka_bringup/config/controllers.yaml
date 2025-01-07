@@ -47,6 +47,16 @@ controller_manager:
     franka_robot_state_broadcaster:
       type: franka_robot_state_broadcaster/FrankaRobotStateBroadcaster
 
+    ## custom
+    joint_torque_controller:
+      type: franka_controllers/JointTorqueController
+
+    joint_velocity_controller:
+      type: franka_controllers/JointVelocityController
+
+    joint_position_controller:
+      type: franka_controllers/JointPositionController
+
 joint_impedance_with_ik_example_controller:
   ros__parameters:
     k_gains:
