@@ -38,8 +38,8 @@ JointTorqueController::command_interface_configuration() const {
   return config;
 }
 
-controller_interface::InterfaceConfiguration
-JointTorqueController::state_interface_configuration() const {
+controller_interface::InterfaceConfiguration JointTorqueController::state_interface_configuration()
+    const {
   controller_interface::InterfaceConfiguration config;
   config.type = controller_interface::interface_configuration_type::INDIVIDUAL;
   for (int i = 1; i <= num_joints; ++i) {
@@ -53,13 +53,14 @@ JointTorqueController::state_interface_configuration() const {
 controller_interface::return_type JointTorqueController::update(
     const rclcpp::Time& /*time*/,
     const rclcpp::Duration& /*period*/) {
-
-  auto joint_command_msg = joint_command_msg_external_point_ptr_.readFromRT();
-
-  if (joint_command_msg){
-    std::shared_ptr<sensor_msgs::msg::JointState> joint_command = *joint_command_msg;
+  auto joint_command_msg_ptr = joint_command_msg_external_point_ptr_.readFromRT();
+  if (!joint_command_msg_ptr || !(*joint_command_msg_ptr)) {
+    // Buffer is empty or contains nullptr
+  } else {
+    // Buffer contains a valid message
+    auto joint_command_msg = *joint_command_msg_ptr;
     for (int i = 0; i < num_joints; ++i) {
-      command_interfaces_[i].set_value(joint_command->effort[i]);
+      command_interfaces_[i].set_value(joint_command_msg->effort[i]);
     }
   }
 
@@ -110,17 +111,16 @@ CallbackReturn JointTorqueController::on_configure(
     RCLCPP_INFO(get_node()->get_logger(), "Default collision behavior set.");
   }
 
-
   // subscribe
-  joint_command_subscriber_ =
-    get_node()->create_subscription<sensor_msgs::msg::JointState>(
-      "/hday/controller/joint_command", rclcpp::SystemDefaultsQoS(),
+  joint_command_subscriber_ = get_node()->create_subscription<sensor_msgs::msg::JointState>(
+      "/hday/fr3_controller/joint_command", rclcpp::SystemDefaultsQoS(),
       std::bind(&JointTorqueController::joint_command_callback, this, std::placeholders::_1));
 
   // publish
-  publisher_ =
-    get_node()->create_publisher<sensor_msgs::msg::JointState>("/hday/controller/joint_state", rclcpp::SystemDefaultsQoS());
-  joint_state_publisher_ = std::make_unique<realtime_tools::RealtimePublisher<sensor_msgs::msg::JointState>>(publisher_);
+  publisher_ = get_node()->create_publisher<sensor_msgs::msg::JointState>(
+      "/hday/fr3_controller/joint_state", rclcpp::SystemDefaultsQoS());
+  joint_state_publisher_ =
+      std::make_unique<realtime_tools::RealtimePublisher<sensor_msgs::msg::JointState>>(publisher_);
 
   joint_state_publisher_->lock();
   joint_state_publisher_->msg_.name.resize(num_joints);
@@ -140,43 +140,33 @@ CallbackReturn JointTorqueController::on_configure(
 
 CallbackReturn JointTorqueController::on_activate(
     const rclcpp_lifecycle::State& /*previous_state*/) {
+  joint_command_msg_external_point_ptr_.writeFromNonRT(
+      std::shared_ptr<sensor_msgs::msg::JointState>());
   updateJointStates();
   return CallbackReturn::SUCCESS;
 }
 
 void JointTorqueController::joint_command_callback(
-  const std::shared_ptr<sensor_msgs::msg::JointState> msg)
-{
-  if (!validate_effort_msg(*msg))
-  {
+    const std::shared_ptr<sensor_msgs::msg::JointState> msg) {
+  if (!validate_effort_msg(*msg)) {
     return;
   }
   joint_command_msg_external_point_ptr_.writeFromNonRT(msg);
 };
 
-
-bool JointTorqueController::validate_effort_msg(
-  const sensor_msgs::msg::JointState & command) const
-{
-  if (command.name.empty())
-  {
+bool JointTorqueController::validate_effort_msg(const sensor_msgs::msg::JointState& command) const {
+  if (command.name.empty()) {
     RCLCPP_ERROR(get_node()->get_logger(), "Empty joint names on incoming command.");
     return false;
   }
 
-  if (command.name.size() != num_joints)
-  {
-    RCLCPP_ERROR(
-      get_node()->get_logger(),
-      "Joint name size mismatch");
+  if (command.name.size() != num_joints) {
+    RCLCPP_ERROR(get_node()->get_logger(), "Joint name size mismatch");
     return false;
   }
 
-  if (command.effort.size() != num_joints)
-  {
-    RCLCPP_ERROR(
-      get_node()->get_logger(),
-      "Effort command size mismatch");
+  if (command.effort.size() != num_joints) {
+    RCLCPP_ERROR(get_node()->get_logger(), "Effort command size mismatch");
     return false;
   }
 
@@ -200,15 +190,11 @@ void JointTorqueController::updateJointStates() {
   }
 }
 
-
-void JointTorqueController::publish_state(
-  const sensor_msgs::msg::JointState & joint_state)
-{
-  if (joint_state_publisher_ && joint_state_publisher_->trylock())
-  {
+void JointTorqueController::publish_state(const sensor_msgs::msg::JointState& joint_state) {
+  if (joint_state_publisher_ && joint_state_publisher_->trylock()) {
     joint_state_publisher_->msg_.header.stamp = joint_state.header.stamp;
-    for (int i = 1; i <= num_joints; ++i) {
-      joint_state_publisher_->msg_.name[i] = arm_id_ + "_joint" + std::to_string(i);
+    for (int i = 0; i < num_joints; ++i) {
+      joint_state_publisher_->msg_.name[i] = arm_id_ + "_joint" + std::to_string(i + 1);
     }
     joint_state_publisher_->msg_.position = joint_state.position;
     joint_state_publisher_->msg_.velocity = joint_state.velocity;
