@@ -193,8 +193,11 @@ void JointTorqueController::updateJointStates() {
 void JointTorqueController::publish_state(const sensor_msgs::msg::JointState& joint_state) {
   if (joint_state_publisher_ && joint_state_publisher_->trylock()) {
     joint_state_publisher_->msg_.header.stamp = joint_state.header.stamp;
+    // for (int i = 0; i < num_joints; ++i) {
+    //   joint_state_publisher_->msg_.name[i] = arm_id_ + "_joint" + std::to_string(i + 1);
+    // }
     for (int i = 0; i < num_joints; ++i) {
-      joint_state_publisher_->msg_.name[i] = arm_id_ + "_joint" + std::to_string(i + 1);
+      joint_state_publisher_->msg_.name[i] = "joint" + std::to_string(i + 1);
     }
     joint_state_publisher_->msg_.position = joint_state.position;
     joint_state_publisher_->msg_.velocity = joint_state.velocity;
