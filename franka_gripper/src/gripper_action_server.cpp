@@ -124,9 +124,14 @@ GripperActionServer::GripperActionServer(const rclcpp::NodeOptions& options)
       });
 
   this->joint_states_publisher_ =
-      this->create_publisher<sensor_msgs::msg::JointState>("~/joint_states", 1);
-  this->timer_ = this->create_wall_timer(rclcpp::WallRate(kStatePublishRate).period(),
+      this->create_publisher<sensor_msgs::msg::JointState>("/regulated/joint_states", 1);
+  this->desired_joint_state_subscriber_ = this->create_subscription<sensor_msgs::msg::JointState>(
+      "/command/joint_states", rclcpp::SystemDefaultsQoS(),
+      std::bind(&GripperActionServer::desiredJointStateCallback, this, std::placeholders::_1));
+  this->timer_ = this->create_wall_timer(std::chrono::milliseconds(10),
                                          [this]() { return publishGripperState(); });
+  // this->timer_ = this->create_wall_timer(rclcpp::WallRate(kStatePublishRate).period(),
+  //                                        [this]() { return publishGripperState(); });
 }
 
 rclcpp_action::CancelResponse GripperActionServer::handleCancel(Task task) {
@@ -259,15 +264,19 @@ void GripperActionServer::stopServiceCallback(const std::shared_ptr<Trigger::Res
 
 void GripperActionServer::publishGripperState() {
   std::lock_guard<std::mutex> lock(gripper_state_mutex_);
+
   try {
     current_gripper_state_ = gripper_->readOnce();
   } catch (const franka::Exception& e) {
     RCLCPP_ERROR(this->get_logger(), e.what());
   }
+
   sensor_msgs::msg::JointState joint_states;
   joint_states.header.stamp = this->now();
-  joint_states.name.push_back(this->joint_names_[0]);
-  joint_states.name.push_back(this->joint_names_[1]);
+  // joint_states.name.push_back(this->joint_names_[0]);
+  // joint_states.name.push_back(this->joint_names_[1]);
+  joint_states.name.push_back("regulated/panda_finger_joint1");
+  joint_states.name.push_back("regulated/panda_finger_joint2");
   joint_states.position.push_back(current_gripper_state_.width / 2);
   joint_states.position.push_back(current_gripper_state_.width / 2);
   joint_states.velocity.push_back(0.0);
@@ -285,6 +294,20 @@ void GripperActionServer::publishGripperCommandFeedback(
   gripper_feedback->effort = 0.;
   goal_handle->publish_feedback(gripper_feedback);
 }
+
+void GripperActionServer::desiredJointStateCallback(
+    const std::shared_ptr<sensor_msgs::msg::JointState> msg) {
+  if (msg->position.empty()) {
+    RCLCPP_WARN(this->get_logger(), "Received JointState with no positions");
+    return;
+  }
+
+  double desired_width = 2.0 * (msg->position[0]);
+  double speed = 0.05;  // tuning param
+
+  gripper_->move(desired_width, speed);
+}
+
 }  // namespace franka_gripper
 
 RCLCPP_COMPONENTS_REGISTER_NODE(franka_gripper::GripperActionServer)  // NOLINT
