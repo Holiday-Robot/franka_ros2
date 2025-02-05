@@ -113,12 +113,12 @@ CallbackReturn JointTorqueController::on_configure(
 
   // subscribe
   joint_command_subscriber_ = get_node()->create_subscription<sensor_msgs::msg::JointState>(
-      "/hday/fr3_controller/joint_command", rclcpp::SystemDefaultsQoS(),
+      "/hday/rt_franka/joint_torque_command", rclcpp::SystemDefaultsQoS(),
       std::bind(&JointTorqueController::joint_command_callback, this, std::placeholders::_1));
 
   // publish
   publisher_ = get_node()->create_publisher<sensor_msgs::msg::JointState>(
-      "/hday/fr3_controller/joint_state", rclcpp::SystemDefaultsQoS());
+      "/hday/rt_franka/joint_state", rclcpp::SystemDefaultsQoS());
   joint_state_publisher_ =
       std::make_unique<realtime_tools::RealtimePublisher<sensor_msgs::msg::JointState>>(publisher_);
 
