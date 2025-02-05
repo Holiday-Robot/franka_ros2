@@ -31,6 +31,8 @@ find_package(Eigen3 REQUIRED)
 find_package(franka_semantic_components REQUIRED)
 find_package(moveit_core REQUIRED)
 find_package(moveit_msgs REQUIRED)
+find_package(holiday_robotics_library_common REQUIRED)
+find_package(holiday_robotics_library_robot_model REQUIRED)
 foreach(Dependency IN ITEMS ${THIS_PACKAGE_INCLUDE_DEPENDS})
   find_package(${Dependency} REQUIRED)
 endforeach()
@@ -47,7 +49,15 @@ target_include_directories(
         PUBLIC
         include
         ${EIGEN3_INCLUDE_DIRS}
+        ${holiday_robotics_library_common_INCLUDE_DIRS}
+        ${holiday_robotics_library_robot_model_INCLUDE_DIRS}
 )
+target_link_libraries(
+        ${PROJECT_NAME}
+        ${holiday_robotics_library_common_LIBRARIES}
+        ${holiday_robotics_library_robot_model_LIBRARIES}
+)
+
 ament_target_dependencies(
         ${PROJECT_NAME}
         controller_interface
@@ -58,6 +68,8 @@ ament_target_dependencies(
         franka_semantic_components
         moveit_core
         moveit_msgs
+        holiday_robotics_library_common
+        holiday_robotics_library_robot_model
         ${THIS_PACKAGE_INCLUDE_DEPENDS}
 )
 

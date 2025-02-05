@@ -17,6 +17,8 @@
   <depend>franka_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>franka_semantic_components</depend>
+  <depend>holiday_robotics_library_common</depend>
+  <depend>holiday_robotics_library_robot_model</depend>
 
 
   <test_depend>ament_cmake_clang_format</test_depend>

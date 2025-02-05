@@ -24,6 +24,12 @@
 
 namespace franka_controllers {
 
+JointPositionController::JointPositionController()
+    : hday_robot_description_(hday_robot_name, hday_robot_type),
+      hday_robot_(hday_robot_description_) {
+  hday_target_frames_ = hday_robot_.getEndeffectorLinks();
+}
+
 controller_interface::InterfaceConfiguration
 JointPositionController::command_interface_configuration() const {
   controller_interface::InterfaceConfiguration config;
@@ -68,7 +74,17 @@ controller_interface::return_type JointPositionController::update(
   }
 
   updateJointStates();
-  publish_state(joint_state);
+  publish_joint_state(joint_state);
+
+  for (size_t i = 0; i < joint_state.position.size(); i++) {
+    hday_cur_joints_["joint" + std::to_string(i + 1)] = joint_state.position[i];
+  }
+  auto fk_results = hday_robot_.forwardKinematics(hday_cur_joints_, hday_target_frames_, "link0");
+  cur_ef_pose_ = fk_results[hday_target_frames_[0]].pose.matrix();
+  cur_ef_position_ = cur_ef_pose_.block<3, 1>(0, 3);
+  cur_ef_orientation_ = Eigen::Quaterniond(cur_ef_pose_.block<3, 3>(0, 0));
+
+  publish_ef_pose(cur_ef_position_, cur_ef_orientation_);
 
   return controller_interface::return_type::OK;
 }
@@ -105,10 +121,17 @@ CallbackReturn JointPositionController::on_configure(
       std::bind(&JointPositionController::joint_command_callback, this, std::placeholders::_1));
 
   // publish
-  publisher_ = get_node()->create_publisher<sensor_msgs::msg::JointState>(
+  joint_state_base_publisher_ = get_node()->create_publisher<sensor_msgs::msg::JointState>(
       "/hday/rt_franka/joint_state", rclcpp::SystemDefaultsQoS());
   joint_state_publisher_ =
-      std::make_unique<realtime_tools::RealtimePublisher<sensor_msgs::msg::JointState>>(publisher_);
+      std::make_unique<realtime_tools::RealtimePublisher<sensor_msgs::msg::JointState>>(
+          joint_state_base_publisher_);
+
+  ef_pose_base_publisher_ = get_node()->create_publisher<geometry_msgs::msg::PoseStamped>(
+      "/hday/rt_franka/ef_pose", rclcpp::SystemDefaultsQoS());
+  ef_pose_publisher_ =
+      std::make_unique<realtime_tools::RealtimePublisher<geometry_msgs::msg::PoseStamped>>(
+          ef_pose_base_publisher_);
 
   joint_state_publisher_->lock();
   joint_state_publisher_->msg_.name.resize(num_joints);
@@ -180,7 +203,7 @@ void JointPositionController::updateJointStates() {
   }
 }
 
-void JointPositionController::publish_state(const sensor_msgs::msg::JointState& joint_state) {
+void JointPositionController::publish_joint_state(const sensor_msgs::msg::JointState& joint_state) {
   if (joint_state_publisher_ && joint_state_publisher_->trylock()) {
     joint_state_publisher_->msg_.header.stamp = joint_state.header.stamp;
     // for (int i = 0; i < num_joints; ++i) {
@@ -194,6 +217,21 @@ void JointPositionController::publish_state(const sensor_msgs::msg::JointState& 
     joint_state_publisher_->msg_.effort = joint_state.effort;
   }
   joint_state_publisher_->unlockAndPublish();
+}
+
+void JointPositionController::publish_ef_pose(const Eigen::Vector3d ef_position,
+                                              Eigen::Quaterniond ef_orientation) {
+  if (ef_pose_publisher_ && ef_pose_publisher_->trylock()) {
+    ef_pose_publisher_->msg_.header.stamp = joint_state.header.stamp;
+    ef_pose_publisher_->msg_.pose.position.x = ef_position(0);
+    ef_pose_publisher_->msg_.pose.position.y = ef_position(1);
+    ef_pose_publisher_->msg_.pose.position.z = ef_position(2);
+    ef_pose_publisher_->msg_.pose.orientation.x = ef_orientation.x();
+    ef_pose_publisher_->msg_.pose.orientation.y = ef_orientation.y();
+    ef_pose_publisher_->msg_.pose.orientation.z = ef_orientation.z();
+    ef_pose_publisher_->msg_.pose.orientation.w = ef_orientation.w();
+  }
+  ef_pose_publisher_->unlockAndPublish();
 }
 
 }  // namespace franka_controllers
