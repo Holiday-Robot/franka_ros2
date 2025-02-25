@@ -69,7 +69,7 @@ class JointVelocityController : public controller_interface::ControllerInterface
 
   sensor_msgs::msg::JointState joint_state;
 
-  std::string hday_robot_name = "panda";
+  std::string hday_robot_name = "fr3";
   std::string hday_robot_type = "default";
   hday::robot_parser::Description hday_robot_description_;
   hday::robot_model::RobotModel hday_robot_;
