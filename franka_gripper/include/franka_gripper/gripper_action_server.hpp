@@ -108,6 +108,8 @@ class GripperActionServer : public rclcpp::Node {
   double default_epsilon_outer_;  //  default gripper outer epsilon parameter value in m
   std::vector<std::string> joint_names_;
   std::chrono::nanoseconds future_wait_timeout_{0};
+  double is_grasped_ = false;
+  double lock_grasp_event_ = false;
 
   void publishGripperState();
 

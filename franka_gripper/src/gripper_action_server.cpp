@@ -124,9 +124,9 @@ GripperActionServer::GripperActionServer(const rclcpp::NodeOptions& options)
       });
 
   this->joint_states_publisher_ =
-      this->create_publisher<sensor_msgs::msg::JointState>("/regulated/joint_states", 1);
+      this->create_publisher<sensor_msgs::msg::JointState>("/franka_gripper/joint_states", 1);
   this->desired_joint_state_subscriber_ = this->create_subscription<sensor_msgs::msg::JointState>(
-      "/command/joint_states", rclcpp::SystemDefaultsQoS(),
+      "/franka_gripper/desired_joint_states", rclcpp::SystemDefaultsQoS(),
       std::bind(&GripperActionServer::desiredJointStateCallback, this, std::placeholders::_1));
   this->timer_ = this->create_wall_timer(std::chrono::milliseconds(10),
                                          [this]() { return publishGripperState(); });
@@ -273,10 +273,10 @@ void GripperActionServer::publishGripperState() {
 
   sensor_msgs::msg::JointState joint_states;
   joint_states.header.stamp = this->now();
-  // joint_states.name.push_back(this->joint_names_[0]);
-  // joint_states.name.push_back(this->joint_names_[1]);
-  joint_states.name.push_back("regulated/panda_finger_joint1");
-  joint_states.name.push_back("regulated/panda_finger_joint2");
+  joint_states.name.push_back(this->joint_names_[0]);
+  joint_states.name.push_back(this->joint_names_[1]);
+  // joint_states.name.push_back("regulated/panda_finger_joint1");
+  // joint_states.name.push_back("regulated/panda_finger_joint2");
   joint_states.position.push_back(current_gripper_state_.width / 2);
   joint_states.position.push_back(current_gripper_state_.width / 2);
   joint_states.velocity.push_back(0.0);
@@ -302,10 +302,40 @@ void GripperActionServer::desiredJointStateCallback(
     return;
   }
 
-  double desired_width = 2.0 * (msg->position[0]);
-  double speed = 0.05;  // tuning param
+  // tuning params
+  double speed = 0.1;
+  double force = 50;
+  double epsilon_inner = 0.01;
+  double epsilon_outer = 0.08;  // to make every grasp success
 
-  gripper_->move(desired_width, speed);
+  double width;
+  if (msg->position[0] > 0.5) {
+    width = 1;
+  } else {
+    width = 0;
+  }
+
+  // gripper_->move(width, speed);
+  if (lock_grasp_event_) {
+    // do nothing
+  } else {
+    lock_grasp_event_ = true;
+
+    if (width == 1) {
+      if (is_grasped_) {
+        gripper_->grasp(width, speed, 50, epsilon_inner, epsilon_outer);
+        is_grasped_ = false;
+      }
+
+    } else {
+      if (!is_grasped_) {
+        gripper_->grasp(width, speed, 50, epsilon_inner, epsilon_outer);
+        is_grasped_ = true;
+      }
+    }
+
+    lock_grasp_event_ = false;
+  }
 }
 
 }  // namespace franka_gripper
