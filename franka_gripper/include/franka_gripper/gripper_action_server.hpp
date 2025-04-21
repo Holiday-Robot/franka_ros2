@@ -101,6 +101,7 @@ class GripperActionServer : public rclcpp::Node {
   franka::GripperState current_gripper_state_;
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr joint_states_publisher_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr desired_joint_state_subscriber_;
+  rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr desired_mp_joint_state_subscriber_;
   rclcpp::TimerBase::SharedPtr timer_;
 
   double default_speed_;          // default gripper speed parameter value in m/s
@@ -118,6 +119,7 @@ class GripperActionServer : public rclcpp::Node {
   void stopServiceCallback(const std::shared_ptr<Trigger::Response>& response);
 
   void desiredJointStateCallback(const std::shared_ptr<sensor_msgs::msg::JointState> msg);
+  void desiredMPJointStateCallback(const std::shared_ptr<sensor_msgs::msg::JointState> msg);
 
   /// accepts any cancel request
   rclcpp_action::CancelResponse handleCancel(Task task);

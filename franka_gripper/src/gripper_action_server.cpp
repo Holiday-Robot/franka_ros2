@@ -128,6 +128,16 @@ GripperActionServer::GripperActionServer(const rclcpp::NodeOptions& options)
   this->desired_joint_state_subscriber_ = this->create_subscription<sensor_msgs::msg::JointState>(
       "/franka_gripper/desired_joint_states", rclcpp::SystemDefaultsQoS(),
       std::bind(&GripperActionServer::desiredJointStateCallback, this, std::placeholders::_1));
+  this->desired_mp_joint_state_subscriber_ =
+      this->create_subscription<sensor_msgs::msg::JointState>(
+          "/franka_gripper/desired_mp_joint_states", rclcpp::SystemDefaultsQoS(),
+          std::bind(&GripperActionServer::desiredMPJointStateCallback, this,
+                    std::placeholders::_1));
+  // this->desired_mp_joint_state_subscriber_ =
+  //     this->create_subscription<sensor_msgs::msg::JointState>(
+  //         "/hand/joint_states", rclcpp::SystemDefaultsQoS(),
+  //         std::bind(&GripperActionServer::desiredMPJointStateCallback, this,
+  //                   std::placeholders::_1));
   this->timer_ = this->create_wall_timer(std::chrono::milliseconds(10),
                                          [this]() { return publishGripperState(); });
   // this->timer_ = this->create_wall_timer(rclcpp::WallRate(kStatePublishRate).period(),
@@ -303,13 +313,57 @@ void GripperActionServer::desiredJointStateCallback(
   }
 
   // tuning params
-  double speed = 0.1;
+  double speed = 0.01;
   double force = 50;
   double epsilon_inner = 0.01;
   double epsilon_outer = 0.08;  // to make every grasp success
 
   double width;
   if (msg->position[0] > 0.5) {
+    width = 1;
+  } else {
+    width = 0;
+  }
+
+  // gripper_->move(width, speed);
+  if (lock_grasp_event_) {
+    // do nothing
+  } else {
+    lock_grasp_event_ = true;
+
+    if (width == 1) {
+      if (is_grasped_) {
+        gripper_->grasp(width, speed, 50, epsilon_inner, epsilon_outer);
+        is_grasped_ = false;
+      }
+
+    } else {
+      if (!is_grasped_) {
+        gripper_->grasp(width, speed, 50, epsilon_inner, epsilon_outer);
+        is_grasped_ = true;
+      }
+    }
+
+    lock_grasp_event_ = false;
+  }
+}
+
+void GripperActionServer::desiredMPJointStateCallback(
+    const std::shared_ptr<sensor_msgs::msg::JointState> msg) {
+  if (msg->position.empty()) {
+    RCLCPP_WARN(this->get_logger(), "Received JointState with no positions");
+    return;
+  }
+
+  // tuning params
+  double speed = 0.1;
+  double force = 50;
+  double epsilon_inner = 0.01;
+  double epsilon_outer = 0.08;  // to make every grasp success
+
+  double width;
+  std::cout << "msg->position[0]: " << msg->position[0] << std::endl;
+  if (msg->position[0] > 0.032) {  // 0.032
     width = 1;
   } else {
     width = 0;

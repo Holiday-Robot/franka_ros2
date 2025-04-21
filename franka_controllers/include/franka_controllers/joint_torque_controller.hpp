@@ -69,8 +69,8 @@ class JointTorqueController : public controller_interface::ControllerInterface {
 
   sensor_msgs::msg::JointState joint_state;
 
-  std::string hday_robot_name = "fr3";
-  std::string hday_robot_type = "default";
+  std::string hday_robot_name = "fr3_gripper";
+  std::string hday_robot_type = "insert_holly";
   hday::robot_parser::Description hday_robot_description_;
   hday::robot_model::RobotModel hday_robot_;
   std::vector<std::string> hday_target_frames_;
