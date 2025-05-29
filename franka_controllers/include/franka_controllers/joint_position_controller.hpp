@@ -17,6 +17,7 @@
 #include <string>
 
 #include <Eigen/Eigen>
+#include <chrono>
 #include <controller_interface/controller_interface.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include "common/types/joint_state.hpp"
@@ -81,6 +82,41 @@ class JointPositionController : public controller_interface::ControllerInterface
   Eigen::MatrixXd cur_ef_pose_;
   Eigen::Vector3d cur_ef_position_;
   Eigen::Quaterniond cur_ef_orientation_;
+
+  typedef Eigen::Matrix<double, 8, 8> Matrix8d;
+  typedef Eigen::Matrix<double, 8, Eigen::Dynamic> Matrix8Xd;
+  typedef Eigen::Matrix<double, Eigen::Dynamic, 1> VectorXd;
+
+  Matrix8Xd compute7thOrderCoeffs(const Eigen::VectorXd& q0, const Eigen::VectorXd& qf, double T);
+  void evaluateTrajectory(const Matrix8Xd& coeffs,
+                          double t,
+                          Eigen::VectorXd& pos,
+                          Eigen::VectorXd& vel,
+                          Eigen::VectorXd& acc,
+                          Eigen::VectorXd& jerk);
+  void evaluateTrajectory_pos(const Matrix8Xd& coeffs, double t, Eigen::VectorXd& pos);
+  double computeViolation(const Matrix8Xd& coeffs,
+                          double T,
+                          double v_max,
+                          double a_max,
+                          double j_max,
+                          double dt);
+  double findMinimumT(const Eigen::VectorXd& q0,
+                      const Eigen::VectorXd& qf,
+                      double v_max,
+                      double a_max,
+                      double j_max,
+                      double dt,
+                      double margin);
+  bool compute_required = true;
+  Eigen::VectorXd pos, vel, acc, jerk;
+  double T_opt = 0.0;
+  double elapsed_time = 0.0;
+  Matrix8Xd coeffs;
+  bool ini = true;
+  Eigen::VectorXd q0, qf;
+  bool command_updated = false;
+  bool send_mode = false;
 };
 
 }  // namespace franka_controllers

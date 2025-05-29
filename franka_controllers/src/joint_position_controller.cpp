@@ -22,6 +22,11 @@
 
 #include <Eigen/Eigen>
 
+typedef Eigen::Matrix<double, 8, 8> Matrix8d;
+typedef Eigen::Matrix<double, 8, Eigen::Dynamic> Matrix8Xd;
+typedef Eigen::Matrix<double, Eigen::Dynamic, 1> VectorXd;
+
+using namespace std::chrono;
 namespace franka_controllers {
 
 JointPositionController::JointPositionController()
@@ -45,11 +50,135 @@ JointPositionController::state_interface_configuration() const {
   controller_interface::InterfaceConfiguration config;
   config.type = controller_interface::interface_configuration_type::INDIVIDUAL;
   for (int i = 1; i <= num_joints; ++i) {
+    config.names.push_back(arm_id_ + "_joint" + std::to_string(i) + "/initial_joint_position");
     config.names.push_back(arm_id_ + "_joint" + std::to_string(i) + "/position");
-    config.names.push_back(arm_id_ + "_joint" + std::to_string(i) + "/velocity");
-    config.names.push_back(arm_id_ + "_joint" + std::to_string(i) + "/effort");
+    // config.names.push_back(arm_id_ + "_joint" + std::to_string(i) + "/velocity");
+    // config.names.push_back(arm_id_ + "_joint" + std::to_string(i) + "/effort");
   }
   return config;
+}
+
+// compute 7th order polynomial coefficients
+Matrix8Xd JointPositionController::compute7thOrderCoeffs(const Eigen::VectorXd& q0,
+                                                         const Eigen::VectorXd& qf,
+                                                         double T) {
+  int D = q0.size();
+  Matrix8d A;
+  A << 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0,
+      0, 1, T, T * T, T * T * T, T * T * T * T, std::pow(T, 5), std::pow(T, 6), std::pow(T, 7), 0,
+      1, 2 * T, 3 * T * T, 4 * std::pow(T, 3), 5 * std::pow(T, 4), 6 * std::pow(T, 5),
+      7 * std::pow(T, 6), 0, 0, 2, 6 * T, 12 * T * T, 20 * std::pow(T, 3), 30 * std::pow(T, 4),
+      42 * std::pow(T, 5), 0, 0, 0, 6, 24 * T, 60 * T * T, 120 * std::pow(T, 3),
+      210 * std::pow(T, 4);
+
+  Matrix8Xd b(8, D);
+  b.row(0) = q0.transpose();
+  b.row(1).setZero();
+  b.row(2).setZero();
+  b.row(3).setZero();
+  b.row(4) = qf.transpose();
+  b.row(5).setZero();
+  b.row(6).setZero();
+  b.row(7).setZero();
+
+  Matrix8Xd coeffs = A.fullPivLu().solve(b);
+  return coeffs;
+}
+
+void JointPositionController::evaluateTrajectory(const Matrix8Xd& coeffs,
+                                                 double t,
+                                                 Eigen::VectorXd& pos,
+                                                 Eigen::VectorXd& vel,
+                                                 Eigen::VectorXd& acc,
+                                                 Eigen::VectorXd& jerk) {
+  int D = coeffs.cols();
+
+  for (int i = 0; i < D; ++i) {
+    Eigen::VectorXd c = coeffs.col(i);
+    pos(i) = c(0) + c(1) * t + c(2) * std::pow(t, 2) + c(3) * std::pow(t, 3) +
+             c(4) * std::pow(t, 4) + c(5) * std::pow(t, 5) + c(6) * std::pow(t, 6) +
+             c(7) * std::pow(t, 7);
+    vel(i) = c(1) + 2 * c(2) * t + 3 * c(3) * std::pow(t, 2) + 4 * c(4) * std::pow(t, 3) +
+             5 * c(5) * std::pow(t, 4) + 6 * c(6) * std::pow(t, 5) + 7 * c(7) * std::pow(t, 6);
+    acc(i) = 2 * c(2) + 6 * c(3) * t + 12 * c(4) * std::pow(t, 2) + 20 * c(5) * std::pow(t, 3) +
+             30 * c(6) * std::pow(t, 4) + 42 * c(7) * std::pow(t, 5);
+    jerk(i) = 6 * c(3) + 24 * c(4) * t + 60 * c(5) * std::pow(t, 2) + 120 * c(6) * std::pow(t, 3) +
+              210 * c(7) * std::pow(t, 4);
+  }
+}
+
+void JointPositionController::evaluateTrajectory_pos(const Matrix8Xd& coeffs,
+                                                     double t,
+                                                     Eigen::VectorXd& pos) {
+  int D = coeffs.cols();
+
+  for (int i = 0; i < D; ++i) {
+    Eigen::VectorXd c = coeffs.col(i);
+    pos(i) = c(0) + c(1) * t + c(2) * std::pow(t, 2) + c(3) * std::pow(t, 3) +
+             c(4) * std::pow(t, 4) + c(5) * std::pow(t, 5) + c(6) * std::pow(t, 6) +
+             c(7) * std::pow(t, 7);
+  }
+}
+double JointPositionController::computeViolation(const Matrix8Xd& coeffs,
+                                                 double T,
+                                                 double v_max,
+                                                 double a_max,
+                                                 double j_max,
+                                                 double dt) {
+  int steps = static_cast<int>(T / dt) + 1;
+  double max_violation = 0.0;
+
+  for (int i = 0; i < steps; ++i) {
+    // if (i == 0) {
+    //   v_max = 2.62;
+    // } else if (i == 1) {
+    //   v_max = 2.62;
+    // } else if (i == 2) {
+    //   v_max = 2.62;
+    // } else if (i == 3) {
+    //   v_max = 2.62;
+    // } else if (i == 4) {
+    //   v_max = 5.26;
+    // } else if (i == 5) {
+    //   v_max = 4.18;
+    // } else if (i == 6) {
+    //   v_max = 5.26;
+    // }
+    double t = i * dt;
+    Eigen::VectorXd pos_tmp, vel_tmp, acc_tmp, jerk_tmp;
+    pos_tmp.setZero(num_joints);
+    vel_tmp.setZero(num_joints);
+    acc_tmp.setZero(num_joints);
+    jerk_tmp.setZero(num_joints);
+    evaluateTrajectory(coeffs, t, pos_tmp, vel_tmp, acc_tmp, jerk_tmp);
+    max_violation = std::max(max_violation, vel_tmp.cwiseAbs().maxCoeff() / v_max);
+    max_violation = std::max(max_violation, acc_tmp.cwiseAbs().maxCoeff() / a_max);
+    max_violation = std::max(max_violation, jerk_tmp.cwiseAbs().maxCoeff() / j_max);
+  }
+
+  return max_violation;
+}
+
+double JointPositionController::findMinimumT(const Eigen::VectorXd& q0,
+                                             const Eigen::VectorXd& qf,
+                                             double v_max,
+                                             double a_max,
+                                             double j_max,
+                                             double dt,
+                                             double margin) {
+  double T_low = 0.01, T_high = 10.0, T_mid;
+  for (int iter = 0; iter < 100; ++iter) {
+    T_mid = 0.5 * (T_low + T_high);
+    auto coeffs = compute7thOrderCoeffs(q0, qf, T_mid);
+    double violation = computeViolation(coeffs, T_mid, v_max, a_max, j_max, dt);
+    if (violation < margin)
+      T_high = T_mid;
+    else
+      T_low = T_mid;
+    if (T_high - T_low < 1e-4)
+      break;
+  }
+  return T_high;
 }
 
 controller_interface::return_type JointPositionController::update(
@@ -57,19 +186,53 @@ controller_interface::return_type JointPositionController::update(
     const rclcpp::Duration& /*period*/) {
   if (initialization_flag_) {
     for (int i = 0; i < num_joints; ++i) {
-      initial_q_.at(i) = state_interfaces_[3 * i].get_value();
+      initial_q_.at(i) = state_interfaces_[2 * i].get_value();
+      command_interfaces_[i].set_value(initial_q_.at(i));
     }
     initialization_flag_ = false;
   }
 
-  auto joint_command_msg_ptr = joint_command_msg_external_point_ptr_.readFromRT();
-  if (!joint_command_msg_ptr || !(*joint_command_msg_ptr)) {
-    // Buffer is empty or contains nullptr
-  } else {
-    // Buffer contains a valid message
-    auto joint_command_msg = *joint_command_msg_ptr;
-    for (int i = 0; i < num_joints; ++i) {
-      command_interfaces_[i].set_value(joint_command_msg->position[i]);
+  // auto joint_command_msg_ptr = joint_command_msg_external_point_ptr_.readFromRT();
+  // if (!joint_command_msg_ptr || !(*joint_command_msg_ptr)) {
+  //   // Buffer is empty or contains nullptr
+  // } else {
+  //   // Buffer contains a valid message
+  //   // auto joint_command_msg = *joint_command_msg_ptr;
+
+  //   if (command_updated || send_mode) {
+  //     command_updated = false;
+  //     send_mode = true;
+
+  //     if (elapsed_time <= T_opt) {
+  //       evaluateTrajectory_pos(coeffs, elapsed_time, pos);
+  //       for (int i = 0; i < num_joints; ++i) {
+  //         command_interfaces_[i].set_value(pos(i));
+  //       }
+  //       elapsed_time += 0.001;
+  //       std::cout << elapsed_time << std::endl;
+  //       // std::cout << pos.transpose() << std::endl;
+  //     } else {
+  //       send_mode = false;
+  //       elapsed_time = 0.0;
+  //     }
+  //   }
+  // }
+
+  if (command_updated || send_mode) {
+    command_updated = false;
+    send_mode = true;
+
+    if (elapsed_time <= T_opt) {
+      // std::cout << elapsed_time << std::endl;
+      // std::cout << pos.transpose() << std::endl;
+      evaluateTrajectory_pos(coeffs, elapsed_time, pos);
+      for (int i = 0; i < num_joints; ++i) {
+        command_interfaces_[i].set_value(pos(i));
+      }
+      elapsed_time += 0.001;
+    } else {
+      send_mode = false;
+      elapsed_time = 0.0;
     }
   }
 
@@ -146,13 +309,20 @@ CallbackReturn JointPositionController::on_configure(
   joint_state.velocity.resize(num_joints);
   joint_state.effort.resize(num_joints);
 
+  q0.setZero(num_joints);
+  qf.setZero(num_joints);
+  pos.setZero(num_joints);
+  vel.setZero(num_joints);
+  acc.setZero(num_joints);
+  jerk.setZero(num_joints);
+
   return CallbackReturn::SUCCESS;
 }
 
 CallbackReturn JointPositionController::on_activate(
     const rclcpp_lifecycle::State& /*previous_state*/) {
-  joint_command_msg_external_point_ptr_.writeFromNonRT(
-      std::shared_ptr<sensor_msgs::msg::JointState>());
+  // joint_command_msg_external_point_ptr_.writeFromNonRT(
+  //     std::shared_ptr<sensor_msgs::msg::JointState>());
   updateJointStates();
   initialization_flag_ = true;
   return CallbackReturn::SUCCESS;
@@ -160,10 +330,51 @@ CallbackReturn JointPositionController::on_activate(
 
 void JointPositionController::joint_command_callback(
     const std::shared_ptr<sensor_msgs::msg::JointState> msg) {
-  if (!validate_position_msg(*msg)) {
-    return;
+  std::cout << "A: " << send_mode << std::endl;
+  if (send_mode) {
+    std::cout << "============" << std::endl;
+    std::cout << "Ignored" << std::endl;
+    std::cout << "Ignored" << std::endl;
+    std::cout << "Ignored" << std::endl;
+    std::cout << "Ignored" << std::endl;
+    std::cout << "Ignored" << std::endl;
+    std::cout << "Ignored" << std::endl;
+    std::cout << "Ignored" << std::endl;
   }
-  joint_command_msg_external_point_ptr_.writeFromNonRT(msg);
+
+  if (!send_mode) {
+    if (!validate_position_msg(*msg)) {
+      return;
+    }
+    joint_command_msg_external_point_ptr_.writeFromNonRT(msg);
+    for (int i = 0; i < num_joints; ++i) {
+      if (ini) {
+        q0(i) = initial_q_.at(i);
+      } else {
+        q0(i) = pos(i);
+      }
+    }
+    for (int i = 0; i < num_joints; ++i) {
+      qf(i) = msg->position[i];
+    }
+    ini = false;
+
+    auto start = high_resolution_clock::now();
+    // double frac = 0.9;
+    // double v_max = 2.62, a_max = 10.0 * frac, j_max = 5000.0 * frac;
+    double v_max = 2.62, a_max = 8.0, j_max = 120.0;
+    double dt = 0.001, margin = 0.98;
+    T_opt = findMinimumT(q0, qf, v_max, a_max, j_max, dt, margin);
+    T_opt = std::ceil(T_opt * 1000.0) / 1000.0;
+    coeffs = compute7thOrderCoeffs(q0, qf, T_opt);
+    command_updated = true;
+    send_mode = true;
+    auto end = high_resolution_clock::now();
+    auto duration = duration_cast<milliseconds>(end - start).count();
+    std::cout << T_opt << " " << duration * 0.001 << std::endl;
+    std::cout << q0.transpose() << std::endl;
+    std::cout << qf.transpose() << std::endl;
+  }
 };
 
 bool JointPositionController::validate_position_msg(
@@ -189,17 +400,17 @@ bool JointPositionController::validate_position_msg(
 void JointPositionController::updateJointStates() {
   joint_state.header.stamp = get_node()->now();
   for (auto i = 0; i < num_joints; ++i) {
-    const auto& position_interface = state_interfaces_.at(3 * i);
-    const auto& velocity_interface = state_interfaces_.at(3 * i + 1);
-    const auto& effort_interface = state_interfaces_.at(3 * i + 2);
+    const auto& position_interface = state_interfaces_.at(2 * i + 1);
+    // const auto& velocity_interface = state_interfaces_.at(4 * i + 2);
+    // const auto& effort_interface = state_interfaces_.at(4 * i + 3);
 
     assert(position_interface.get_interface_name() == "position");
-    assert(velocity_interface.get_interface_name() == "velocity");
-    assert(effort_interface.get_interface_name() == "effort");
+    // assert(velocity_interface.get_interface_name() == "velocity");
+    // assert(effort_interface.get_interface_name() == "effort");
 
     joint_state.position[i] = position_interface.get_value();
-    joint_state.velocity[i] = velocity_interface.get_value();
-    joint_state.effort[i] = effort_interface.get_value();
+    // joint_state.velocity[i] = velocity_interface.get_value();
+    // joint_state.effort[i] = effort_interface.get_value();
   }
 }
 
