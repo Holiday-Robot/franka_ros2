@@ -14,6 +14,7 @@
 
 #pragma once
 
+#include <ruckig/ruckig.hpp>
 #include <string>
 
 #include <Eigen/Eigen>
@@ -28,6 +29,10 @@
 #include "realtime_tools/realtime_publisher.hpp"
 #include "robot_model/robot_model.hpp"
 #include "sensor_msgs/msg/joint_state.hpp"
+
+// trajectory optimization
+#include "trajectory_planner/boundary_condition.hpp"
+#include "trajectory_planner/trajectory_optimization.hpp"
 
 using CallbackReturn = rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn;
 
@@ -117,6 +122,20 @@ class JointPositionController : public controller_interface::ControllerInterface
   Eigen::VectorXd q0, qf;
   bool command_updated = false;
   bool send_mode = false;
+
+  std::shared_ptr<hday::trajectory_planner::TrajectoryOptimization> trajectory_planner_;
+  std::shared_ptr<ruckig::Ruckig<7>> otg_;
+  std::shared_ptr<ruckig::InputParameter<7>> input_;
+  std::shared_ptr<ruckig::OutputParameter<7>> output_;
+
+  Eigen::VectorXd q_ref_;
+  Eigen::VectorXd dq_ref_;
+  Eigen::VectorXd d2q_ref_;
+  Eigen::VectorXd q_otg_;
+  Eigen::VectorXd dq_otg_;
+  Eigen::VectorXd d2q_otg_;
+  Eigen::MatrixXd Kp_;
+  Eigen::MatrixXd Kv_;
 };
 
 }  // namespace franka_controllers

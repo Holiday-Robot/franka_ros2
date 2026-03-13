@@ -313,7 +313,7 @@ void GripperActionServer::desiredJointStateCallback(
   }
 
   // tuning params
-  double speed = 0.01;
+  double speed = 0.05;
   double force = 50;
   double epsilon_inner = 0.01;
   double epsilon_outer = 0.08;  // to make every grasp success
@@ -356,7 +356,7 @@ void GripperActionServer::desiredMPJointStateCallback(
   }
 
   // tuning params
-  double speed = 0.1;
+  double speed = 0.05;
   double force = 50;
   double epsilon_inner = 0.01;
   double epsilon_outer = 0.08;  // to make every grasp success

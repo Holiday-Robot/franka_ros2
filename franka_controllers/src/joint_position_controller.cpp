@@ -33,6 +33,53 @@ JointPositionController::JointPositionController()
     : hday_robot_description_(hday_robot_name, hday_robot_type),
       hday_robot_(hday_robot_description_) {
   hday_target_frames_ = hday_robot_.getEndeffectorLinks();
+
+  Eigen::VectorXd pos_lb, pos_ub, vel_limit, acc_limit;
+  hday_robot_.getPositionLowerBounds(pos_lb);
+  hday_robot_.getPositionUpperBounds(pos_ub);
+  hday_robot_.getVelocityBounds(vel_limit);
+  hday_robot_.getAccelerationBounds(acc_limit);
+  vel_limit = 2.62 * Eigen::VectorXd::Ones(vel_limit.size());
+  acc_limit = 8.0 * Eigen::VectorXd::Ones(acc_limit.size());
+  trajectory_planner_ = std::make_shared<hday::trajectory_planner::TrajectoryOptimization>(
+      pos_lb - 0.2 * Eigen::VectorXd::Ones(pos_lb.size()),
+      pos_ub + 0.2 * Eigen::VectorXd::Ones(pos_lb.size()), vel_limit, acc_limit);
+
+  otg_ = std::make_shared<ruckig::Ruckig<7>>(0.001);
+  input_ = std::make_shared<ruckig::InputParameter<7>>();
+  input_->current_position = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+  input_->current_velocity = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+  input_->current_acceleration = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+  input_->target_position = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+  input_->target_velocity = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+  input_->target_acceleration = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+  double vel_scale = 0.5;
+  input_->max_velocity = {2.62 * vel_scale, 2.62 * vel_scale, 2.62 * vel_scale, 2.62 * vel_scale,
+                          2.62 * vel_scale, 2.62 * vel_scale, 2.62 * vel_scale};
+  input_->min_velocity = {2.62 * -vel_scale, 2.62 * -vel_scale, 2.62 * -vel_scale,
+                          2.62 * -vel_scale, 2.62 * -vel_scale, 2.62 * -vel_scale,
+                          2.62 * -vel_scale};
+  double acc_scale = 0.8;
+  input_->max_acceleration = {10.0 * acc_scale, 10.0 * acc_scale, 10.0 * acc_scale,
+                              10.0 * acc_scale, 10.0 * acc_scale, 10.0 * acc_scale,
+                              10.0 * acc_scale};
+  input_->min_acceleration = {10.0 * -acc_scale, 10.0 * -acc_scale, 10.0 * -acc_scale,
+                              10.0 * -acc_scale, 10.0 * -acc_scale, 10.0 * -acc_scale,
+                              10.0 * -acc_scale};
+  double jerk_scale = 0.1;
+  input_->max_jerk = {5000.0 * jerk_scale, 5000.0 * jerk_scale, 5000.0 * jerk_scale,
+                      5000.0 * jerk_scale, 5000.0 * jerk_scale, 5000.0 * jerk_scale,
+                      5000.0 * jerk_scale};
+  output_ = std::make_shared<ruckig::OutputParameter<7>>();
+
+  q_ref_ = Eigen::VectorXd::Zero(7);
+  dq_ref_ = Eigen::VectorXd::Zero(7);
+  d2q_ref_ = Eigen::VectorXd::Zero(7);
+  Kp_ = 0.2 * Eigen::MatrixXd::Identity(7, 7);
+  Kv_ = 0.1 * Eigen::MatrixXd::Identity(7, 7);
+  q_otg_ = Eigen::VectorXd::Zero(7);
+  dq_otg_ = Eigen::VectorXd::Zero(7);
+  d2q_otg_ = Eigen::VectorXd::Zero(7);
 }
 
 controller_interface::InterfaceConfiguration
@@ -62,15 +109,76 @@ JointPositionController::state_interface_configuration() const {
 Matrix8Xd JointPositionController::compute7thOrderCoeffs(const Eigen::VectorXd& q0,
                                                          const Eigen::VectorXd& qf,
                                                          double T) {
-  int D = q0.size();
+  double T2 = T * T;
+  double T3 = T2 * T;
+  double T4 = T3 * T;
+  double T5 = T4 * T;
+  double T6 = T5 * T;
+  double T7 = T6 * T;
   Matrix8d A;
-  A << 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0,
-      0, 1, T, T * T, T * T * T, T * T * T * T, std::pow(T, 5), std::pow(T, 6), std::pow(T, 7), 0,
-      1, 2 * T, 3 * T * T, 4 * std::pow(T, 3), 5 * std::pow(T, 4), 6 * std::pow(T, 5),
-      7 * std::pow(T, 6), 0, 0, 2, 6 * T, 12 * T * T, 20 * std::pow(T, 3), 30 * std::pow(T, 4),
-      42 * std::pow(T, 5), 0, 0, 0, 6, 24 * T, 60 * T * T, 120 * std::pow(T, 3),
-      210 * std::pow(T, 4);
+  // clang-format off
+  A << 1, 0, 0, 0, 0, 0, 0, 0,
+       0, 1, 0, 0, 0, 0, 0, 0,
+       0, 0, 2, 0, 0, 0, 0, 0,
+       0, 0, 0, 6, 0, 0, 0, 0,
+       1, T, T2, T3, T4, T5, T6, T7,
+       0, 1, 2 * T, 3 * T3, 4 * T3, 5 * T4, 6 * T5, 7 * T6,
+       0, 0, 2, 6 * T, 12 * T2, 20 * T3, 30 * T4, 42 * T5,
+       0, 0, 0, 6, 24 * T, 60 * T2, 120 * T3, 210 * T4;
+  // clang-format on
 
+  // double Tinv = 1.0 / T;
+  // double T2inv = Tinv * Tinv;
+  // double T3inv = T2inv * Tinv;
+  // double T4inv = T3inv * Tinv;
+  // double T5inv = T4inv * Tinv;
+  // double T6inv = T5inv * Tinv;
+  // double T7inv = T6inv * Tinv;
+
+  // Matrix8d Ainv;
+  // Ainv.setZero();
+  // Ainv(0, 0) = 1.0;
+  // Ainv(1, 1) = 1.0;
+  // Ainv(2, 2) = 1.0 / 2.0;
+  // Ainv(3, 3) = 1.0 / 6.0;
+
+  // Ainv(4, 0) = -35.0 * T4inv;
+  // Ainv(4, 1) = -20.0 * T3inv;
+  // Ainv(4, 2) = -5.0 * T2inv;
+  // Ainv(4, 3) = -2.0 / 3.0 * Tinv;
+  // Ainv(4, 4) = 35.0 * T4inv;
+  // Ainv(4, 5) = -15.0 * T3inv;
+  // Ainv(4, 6) = 5.0 / 2.0 * T2inv;
+  // Ainv(4, 7) = -1.0 / 6.0 * Tinv;
+
+  // Ainv(5, 0) = 84.0 * T5inv;
+  // Ainv(5, 1) = 45.0 * T4inv;
+  // Ainv(5, 2) = 10.0 * T3inv;
+  // Ainv(5, 3) = 1.0 * T2inv;
+  // Ainv(5, 4) = -84.0 * T5inv;
+  // Ainv(5, 5) = 39.0 * T4inv;
+  // Ainv(5, 6) = -7.0 * T3inv;
+  // Ainv(5, 7) = 1.0 / 2.0 * T2inv;
+
+  // Ainv(6, 0) = -70.0 * T6inv;
+  // Ainv(6, 1) = -36.0 * T5inv;
+  // Ainv(6, 2) = -15.0 / 2.0 * T4inv;
+  // Ainv(6, 3) = -2.0 / 3.0 * T3inv;
+  // Ainv(6, 4) = 70.0 * T6inv;
+  // Ainv(6, 5) = -34.0 * T5inv;
+  // Ainv(6, 6) = 13.0 / 2.0 * T4inv;
+  // Ainv(6, 7) = -1.0 / 2.0 * T3inv;
+
+  // Ainv(7, 0) = 20.0 * T7inv;
+  // Ainv(7, 1) = 10.0 * T6inv;
+  // Ainv(7, 2) = 2.0 * T5inv;
+  // Ainv(7, 3) = 1.0 / 6.0 * T4inv;
+  // Ainv(7, 4) = -20.0 * T7inv;
+  // Ainv(7, 5) = 10.0 * T6inv;
+  // Ainv(7, 6) = -2.0 * T5inv;
+  // Ainv(7, 7) = 1.0 / 6.0 * T4inv;
+
+  int D = q0.size();
   Matrix8Xd b(8, D);
   b.row(0) = q0.transpose();
   b.row(1).setZero();
@@ -82,6 +190,7 @@ Matrix8Xd JointPositionController::compute7thOrderCoeffs(const Eigen::VectorXd& 
   b.row(7).setZero();
 
   Matrix8Xd coeffs = A.fullPivLu().solve(b);
+  // Matrix8Xd coeffs = Ainv * b;
   return coeffs;
 }
 
@@ -225,16 +334,72 @@ controller_interface::return_type JointPositionController::update(
     if (elapsed_time <= T_opt) {
       // std::cout << elapsed_time << std::endl;
       // std::cout << pos.transpose() << std::endl;
+
+      // 7-th order polynomial
       evaluateTrajectory_pos(coeffs, elapsed_time, pos);
+
+      // // trajectory optimization
+      // auto point = trajectory_planner_->getTrajectory().getTrajectoryPointAt(elapsed_time);
+      // pos = point.pos;
+
+      // // ruckig
+      // otg_->update(*input_, *output_);
+      // // Eigen::VectorXd q_otg(7), dq_otg(7), d2q_otg(7);
+      // for (unsigned i = 0; i < num_joints; i++) {
+      //   pos(i) = output_->new_position[i];
+      //   q_otg_(i) = output_->new_position[i];
+      //   dq_otg_(i) = output_->new_velocity[i];
+      //   d2q_otg_(i) = output_->new_acceleration[i];
+      // }
+      // // d2q_ref_ = -Kp_ * (q_ref_ - q_otg) - Kv_ * (dq_ref_ - dq_otg) + d2q_otg;
+      // output_->pass_to_input(*input_);
+
       for (int i = 0; i < num_joints; ++i) {
         command_interfaces_[i].set_value(pos(i));
       }
       elapsed_time += 0.001;
     } else {
+      d2q_otg_.setZero();
+      dq_otg_.setZero();
       send_mode = false;
       elapsed_time = 0.0;
     }
   }
+
+  // if (!ini) {
+  //   d2q_ref_ = -Kp_ * (q_ref_ - q_otg_) - Kv_ * (dq_ref_ - dq_otg_) + d2q_otg_;
+  //   for (unsigned i = 0; i < num_joints; i++) {
+  //     if (d2q_ref_(i) < input_->min_acceleration.value()[i])
+  //       d2q_ref_(i) = input_->min_acceleration.value()[i];
+  //     else if (d2q_ref_(i) > input_->max_acceleration[i])
+  //       d2q_ref_(i) = input_->max_acceleration[i];
+  //   }
+  //   dq_ref_ += 0.001 * d2q_ref_;
+  //   for (unsigned i = 0; i < num_joints; i++) {
+  //     if (dq_ref_(i) < input_->min_velocity.value()[i])
+  //       dq_ref_(i) = input_->min_velocity.value()[i];
+  //     else if (dq_ref_(i) > input_->max_velocity[i])
+  //       dq_ref_(i) = input_->max_velocity[i];
+  //   }
+  //   q_ref_ += 0.001 * dq_ref_;
+  //   for (int i = 0; i < num_joints; ++i) {
+  //     command_interfaces_[i].set_value(q_ref_(i));
+  //   }
+
+  //   std::cout << "---------\n";
+  //   std::cout << "pos: ";
+  //   for (unsigned i = 0; i < num_joints; i++)
+  //     std::cout << q_ref_[i] << "\t";
+  //   std::cout << "\n";
+  //   std::cout << "vel: ";
+  //   for (unsigned i = 0; i < num_joints; i++)
+  //     std::cout << dq_ref_[i] << "\t";
+  //   std::cout << "\n";
+  //   std::cout << "acc: ";
+  //   for (unsigned i = 0; i < num_joints; i++)
+  //     std::cout << d2q_ref_[i] << "\t";
+  //   std::cout << "\n";
+  // }
 
   updateJointStates();
   publish_joint_state(joint_state);
@@ -350,6 +515,8 @@ void JointPositionController::joint_command_callback(
     for (int i = 0; i < num_joints; ++i) {
       if (ini) {
         q0(i) = initial_q_.at(i);
+        input_->current_position[i] = q0(i);  // update only at the initial
+        q_ref_ = q0;
       } else {
         q0(i) = pos(i);
       }
@@ -357,11 +524,12 @@ void JointPositionController::joint_command_callback(
     for (int i = 0; i < num_joints; ++i) {
       qf(i) = msg->position[i];
     }
-    ini = false;
 
     auto start = high_resolution_clock::now();
     // double frac = 0.9;
     // double v_max = 2.62, a_max = 10.0 * frac, j_max = 5000.0 * frac;
+
+    // 7-th order polynomial
     double v_max = 2.62, a_max = 8.0, j_max = 120.0;
     double dt = 0.001, margin = 0.98;
     T_opt = findMinimumT(q0, qf, v_max, a_max, j_max, dt, margin);
@@ -369,6 +537,41 @@ void JointPositionController::joint_command_callback(
     coeffs = compute7thOrderCoeffs(q0, qf, T_opt);
     command_updated = true;
     send_mode = true;
+    ini = false;
+
+    // // trajectory optimization
+    // hday::path_planner::discrete::WaypointGraph::Vertex source, target;
+    // source.point = q0;
+    // source.derivatives.resize(q0.size(), 3);
+    // source.setDerivatives(0, Eigen::VectorXd::Zero(q0.size()));  // v0 = 0
+    // source.setDerivatives(1, Eigen::VectorXd::Zero(q0.size()));  // a0 = 0
+    // target.point = qf;
+    // target.derivatives.resize(qf.size(), 3);
+    // target.setDerivatives(0, Eigen::VectorXd::Zero(qf.size()));  // vf = 0
+    // target.setDerivatives(1, Eigen::VectorXd::Zero(qf.size()));  // af = 0
+
+    // auto path = std::make_shared<hday::path_planner::discrete::WaypointGraph::Edge>();
+    // path->from = std::make_shared<hday::path_planner::discrete::WaypointGraph::Vertex>(source);
+    // path->to = std::make_shared<hday::path_planner::discrete::WaypointGraph::Vertex>(target);
+    // path->velocity_scale = 1.0;
+    // path->acceleration_scale = 0.8;
+    // if (trajectory_planner_->plan({path})) {
+    // T_opt = trajectory_planner_->getTrajectory().duration();
+    // }
+
+    // // ruckig
+    // for (unsigned i = 0; i < num_joints; i++)
+    //   input_->target_position[i] = qf(i);  // update target position at requested
+
+    // ruckig::Trajectory<7> trajectory;
+    // auto result = otg_->calculate(*input_, trajectory);
+    // if (result != ruckig::Result::ErrorInvalidInput) {
+    //   command_updated = true;
+    //   send_mode = true;
+    //   ini = false;
+    //   T_opt = trajectory.get_duration();
+    // }
+
     auto end = high_resolution_clock::now();
     auto duration = duration_cast<milliseconds>(end - start).count();
     std::cout << T_opt << " " << duration * 0.001 << std::endl;

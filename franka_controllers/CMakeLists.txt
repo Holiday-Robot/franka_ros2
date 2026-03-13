@@ -33,6 +33,8 @@ find_package(moveit_core REQUIRED)
 find_package(moveit_msgs REQUIRED)
 find_package(holiday_robotics_library_common REQUIRED)
 find_package(holiday_robotics_library_robot_model REQUIRED)
+find_package(holiday_robotics_library_trajectory_planner REQUIRED)
+find_package(ruckig)
 foreach(Dependency IN ITEMS ${THIS_PACKAGE_INCLUDE_DEPENDS})
   find_package(${Dependency} REQUIRED)
 endforeach()
@@ -51,11 +53,14 @@ target_include_directories(
         ${EIGEN3_INCLUDE_DIRS}
         ${holiday_robotics_library_common_INCLUDE_DIRS}
         ${holiday_robotics_library_robot_model_INCLUDE_DIRS}
+        ${holiday_robotics_library_trajectory_planner_INCLUDE_DIRS}
 )
 target_link_libraries(
         ${PROJECT_NAME}
         ${holiday_robotics_library_common_LIBRARIES}
         ${holiday_robotics_library_robot_model_LIBRARIES}
+        ${holiday_robotics_library_trajectory_planner_LIBRARIES}
+        ruckig::ruckig
 )
 
 ament_target_dependencies(
@@ -70,6 +75,7 @@ ament_target_dependencies(
         moveit_msgs
         holiday_robotics_library_common
         holiday_robotics_library_robot_model
+        holiday_robotics_library_trajectory_planner
         ${THIS_PACKAGE_INCLUDE_DEPENDS}
 )
 
